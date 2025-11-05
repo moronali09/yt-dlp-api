@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     const mode = (req.query.mode || req.body?.mode || 'video').toString(); // 'video' or 'audio'
     if (!url) return res.status(400).json({ error: 'Missing "url" query param' });
 
-    // try to get metadata (best-effort)
+    // metadata best-effort
     let info = null;
     try {
       info = await ytdlp.getInfoAsync(url, { noWarnings: true, noCallHome: true });
@@ -21,23 +21,21 @@ export default async function handler(req, res) {
     }
     const titleSafe = sanitize(info?.title);
 
-    // choose format and file extension (no re-encoding)
+    // choose format and extension (no re-encoding here)
     const wantAudio = mode === 'audio';
     const format = wantAudio ? 'bestaudio' : 'bestvideo+bestaudio/best';
     const ext = wantAudio ? 'm4a' : 'mp4';
 
-    // set download headers
+    // headers for download
     res.setHeader('Content-Disposition', `attachment; filename="${titleSafe}.${ext}"`);
     res.setHeader('Content-Type', 'application/octet-stream');
 
     // stream from yt-dlp into response
     const streamObj = ytdlp.stream(url, {
       format,
-      noPlaylist: true,
-      // add more args if needed, e.g. { youtubeSkipDashManifest: true } via raw args if required
+      noPlaylist: true
     });
 
-    // pipeAsync is provided by ytdlp-nodejs stream wrapper
     try {
       await streamObj.pipeAsync(res);
       if (!res.writableEnded) res.end();
