@@ -1,39 +1,54 @@
-
+// pages/api/download.js
 import { YtDlp } from 'ytdlp-nodejs';
 
-const ytdlp = new YtDlp(); 
+const ytdlp = new YtDlp();
+
+const sanitize = (s = '') =>
+  s.replace(/["<>:\\/|?*\x00-\x1F]/g, '_').trim().slice(0, 180) || 'download';
 
 export default async function handler(req, res) {
   try {
     const url = (req.query.url || req.body?.url || '').toString();
-    const mode = (req.query.mode || req.body?.mode || 'video').toString(); 
-    if (!url) return res.status(400).send('Missing "url" query param');
+    const mode = (req.query.mode || req.body?.mode || 'video').toString(); // 'video' or 'audio'
+    if (!url) return res.status(400).json({ error: 'Missing "url" query param' });
 
-    let info;
+    // try to get metadata (best-effort)
+    let info = null;
     try {
-      info = await ytdlp.getInfoAsync(url, { flatPlaylist: true });
+      info = await ytdlp.getInfoAsync(url, { noWarnings: true, noCallHome: true });
     } catch (e) {
-      console.warn('getInfo failed:', e?.message || e);
+      console.warn('ytdlp getInfo failed (continuing):', e?.message || e);
     }
-    const titleSafe = (info?.title || 'download').replace(/["<>:\\/|?*\x00-\x1F]/g, '_').slice(0,180);
-    const wantAudioOnly = mode === 'audio';
-    const formatArg = wantAudioOnly ? 'bestaudio' : 'best';
+    const titleSafe = sanitize(info?.title);
 
-    const extHint = wantAudioOnly ? 'audio' : 'mp4';
-    res.setHeader('Content-Disposition', `attachment; filename="${titleSafe}.${extHint}"`);
+    // choose format and file extension (no re-encoding)
+    const wantAudio = mode === 'audio';
+    const format = wantAudio ? 'bestaudio' : 'bestvideo+bestaudio/best';
+    const ext = wantAudio ? 'm4a' : 'mp4';
+
+    // set download headers
+    res.setHeader('Content-Disposition', `attachment; filename="${titleSafe}.${ext}"`);
     res.setHeader('Content-Type', 'application/octet-stream');
 
-    const ytdlpStream = ytdlp.stream(url, {
-      format: formatArg,
-      noPlaylist: true
+    // stream from yt-dlp into response
+    const streamObj = ytdlp.stream(url, {
+      format,
+      noPlaylist: true,
+      // add more args if needed, e.g. { youtubeSkipDashManifest: true } via raw args if required
     });
 
-    await ytdlpStream.pipeAsync(res);
-
-    if (!res.writableEnded) res.end();
+    // pipeAsync is provided by ytdlp-nodejs stream wrapper
+    try {
+      await streamObj.pipeAsync(res);
+      if (!res.writableEnded) res.end();
+    } catch (pipeErr) {
+      console.error('Pipe error:', pipeErr);
+      if (!res.headersSent) res.status(500).json({ error: 'Streaming failed', detail: String(pipeErr) });
+      else try { res.end(); } catch (e) {}
+    }
   } catch (err) {
-    console.error('Download error:', err);
-    if (!res.headersSent) res.status(500).send('Server error: ' + (err.message || String(err)));
-    else try { res.end(); } catch (e) {}
+    console.error('Handler error:', err);
+    if (!res.headersSent) return res.status(500).json({ error: 'Server error', detail: String(err) });
+    try { res.end(); } catch (e) {}
   }
 }
