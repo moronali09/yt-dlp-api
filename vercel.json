@@ -1,8 +1,6 @@
 {
   "functions": {
-    "api/download.js": {
-      "memory": 2048,
-      "maxDuration": 300
-    }
+    "api/**": { "memory": 2048, "maxDuration": 300 },
+    "app/api/**": { "memory": 2048, "maxDuration": 300 }
   }
 }
