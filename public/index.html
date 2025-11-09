@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>yt-dlp-api</title>
+</head>
+<body>
+  <script>
+    // Example: https://your-site.vercel.app/?dl=<url or id>&format=mp3
+    const params = new URLSearchParams(location.search);
+    const dl = params.get('dl') || params.get('link') || params.get('v') || params.get('videoID');
+    const format = (params.get('format') || 'mp3').toLowerCase();
+    if (dl) {
+      const encoded = encodeURIComponent(dl);
+      const target = `/api/stream/${encoded}?format=${encodeURIComponent(format)}`;
+      // Do a redirect so browser will download via API stream endpoint
+      location.replace(target);
+    } else {
+      document.body.innerText = 'Usage: add ?dl=<youtube-url-or-id>&format=mp3 to the URL';
+    }
+  </script>
+</body>
+</html>
