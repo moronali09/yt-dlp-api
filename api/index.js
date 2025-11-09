@@ -5,23 +5,43 @@ const ffmpeg = require('fluent-ffmpeg');
 ffmpeg.setFfmpegPath(ffmpegPath);
 const { parse } = require('url');
 
+function sanitizeFilename(name) {
+  return (name || 'file').replace(/[^a-z0-9-_\.]/gi, '_').slice(0, 200);
+}
+
 module.exports = async (req, res) => {
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const origin = `${proto}://${req.headers.host}`;
   const parsed = parse(req.url, true);
-  const pathname = parsed.pathname || '/';
+  const pathname = (parsed.pathname || '/').replace(/\/+$|^\/+/g, '/');
   const parts = pathname.replace(/^\/+/, '').split('/');
   if (parts[0] === 'api') parts.shift();
-  const endpoint = (parts[0] || 'meta').toLowerCase();
+  const endpoint = (parts[0] || '').toLowerCase();
   const q = parsed.query || {};
 
   res.setHeader('Access-Control-Allow-Origin', '*');
+
+  // Root: minimal website. If ?dl=<id|url>&format=mp3|mp4 provided -> redirect to stream endpoint
+  if ((parsed.pathname || '/') === '/') {
+    const dl = q.dl || q.link || q.v || q.videoID;
+    const format = (q.format || 'mp3').toLowerCase();
+    if (dl) {
+      const encoded = encodeURIComponent(dl);
+      const redirectTo = `${origin}/api/stream/${encoded}?format=${encodeURIComponent(format)}`;
+      res.writeHead(302, { Location: redirectTo });
+      return res.end();
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end('Usage: visit this URL with query parameters. Example:
+https://'+req.headers.host+'/?dl=<youtube-url-or-id>&format=mp3
+Or use API endpoints under /api/.');
+  }
 
   if (endpoint === '' || endpoint === 'meta') {
     return res.json({ api: `${origin}/api` });
   }
 
-  if (endpoint === 'ytfullsearch' || endpoint === 'ytfullsearch' || endpoint === 'ytfullsearch') {
+  if (endpoint === 'ytfullsearch') {
     const songName = q.songName || q.q || q.song || '';
     if (!songName) return res.status(400).json([]);
     try {
@@ -40,7 +60,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  if (endpoint === 'ytfullinfo' || endpoint === 'ytfullinfo') {
+  if (endpoint === 'ytfullinfo') {
     const videoID = q.videoID || q.id || parts[1] || q.link;
     if (!videoID) return res.status(400).json({ error: 'videoID required' });
     try {
@@ -60,7 +80,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  if (endpoint === 'ytdl3' || endpoint === 'ytdl' || endpoint === 'ytdl3') {
+  if (endpoint === 'ytdl3' || endpoint === 'ytdl') {
     const link = q.link || q.videoID || q.id || parts[1];
     const format = (q.format || 'mp4').replace(/[^a-z0-9]/gi, '').toLowerCase();
     if (!link) return res.status(400).json({ error: 'link required' });
@@ -69,18 +89,21 @@ module.exports = async (req, res) => {
   }
 
   if (endpoint === 'stream') {
-    const videoID = parts[1] || q.videoID || q.id || q.link;
+    const videoIDraw = parts[1] || q.videoID || q.id || q.link;
+    if (!videoIDraw) return res.status(400).send('video id required');
     const format = (q.format || 'mp4').toLowerCase();
-    if (!videoID) return res.status(400).send('video id required');
+    const videoID = decodeURIComponent(videoIDraw);
     const url = videoID.startsWith('http') ? videoID : `https://www.youtube.com/watch?v=${videoID}`;
 
     if (format === 'mp3') {
       res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Content-Disposition', `attachment; filename="${videoID}.mp3"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitizeFilename(videoID)}.mp3"`);
       try {
         const audioStream = ytdl(url, { quality: 'highestaudio' });
         const proc = ffmpeg(audioStream).format('mp3').audioBitrate(128);
-        proc.on('error', () => res.end());
+        proc.on('error', () => {
+          try { res.end(); } catch (e) {}
+        });
         proc.pipe(res, { end: true });
       } catch (e) {
         res.status(500).end();
@@ -88,7 +111,8 @@ module.exports = async (req, res) => {
       return;
     }
 
-    res.setHeader('Content-Disposition', `attachment; filename="${videoID}.${format}"`);
+    // default -> stream video (mp4 or other requested format name, but ytdl provides best effort)
+    res.setHeader('Content-Disposition', `attachment; filename="${sanitizeFilename(videoID)}.${format}"`);
     res.setHeader('Content-Type', 'application/octet-stream');
     try {
       const stream = ytdl(url, { quality: 'highestvideo' });
@@ -99,6 +123,5 @@ module.exports = async (req, res) => {
     return;
   }
 
-  return res.json({ ok: true, endpoints: ['/api/meta', '/api/ytFullSearch?songName=..', '/api/ytfullinfo?videoID=..', '/api/ytDl3?link=..&format=mp3|mp4', '/api/stream/<id>?format=mp3|mp4'] });
+  return res.json({ ok: true, endpoints: ['/api/meta', '/api/ytFullSearch?songName=..', '/api/ytfullinfo?videoID=..', '/api/ytDl3?link=..&format=mp3|mp4', '/api/stream/<id>?format=mp3|mp4', '/?dl=<id|url>&format=mp3'] });
 };
-    
